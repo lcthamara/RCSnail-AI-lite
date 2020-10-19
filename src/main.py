@@ -10,14 +10,14 @@ from zmq.asyncio import Context
 from commons.common_zmq import recv_array_with_json, initialize_subscriber, initialize_publisher
 from commons.configuration_manager import ConfigurationManager
 
-from src.utilities.transformer import Transformer
-from src.utilities.recorder import Recorder
+# from src.utilities.transformer import Transformer
+from utilities.recorder import Recorder
 
 
 async def main(context: Context):
     config_manager = ConfigurationManager()
     conf = config_manager.config
-    transformer = Transformer(conf)
+    # transformer = Transformer(conf)
     recorder = Recorder(conf)
 
     data_queue = context.socket(zmq.SUB)
@@ -66,13 +66,21 @@ def cancel_tasks(loop):
     for task in asyncio.Task.all_tasks(loop):
         task.cancel()
 
+def signal_cancel_tasks(*args):
+    loop = asyncio.get_event_loop()
+    for task in asyncio.Task.all_tasks(loop):
+        task.cancel()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 
     loop = asyncio.get_event_loop()
-    loop.add_signal_handler(signal.SIGINT, cancel_tasks, loop)
-    loop.add_signal_handler(signal.SIGTERM, cancel_tasks, loop)
+    # not implemented in Windows:
+    # loop.add_signal_handler(signal.SIGINT, cancel_tasks, loop)
+    # loop.add_signal_handler(signal.SIGTERM, cancel_tasks, loop)
+    # alternative
+    signal.signal(signal.SIGINT, signal_cancel_tasks)
+    signal.signal(signal.SIGTERM, signal_cancel_tasks)
 
     context = zmq.asyncio.Context()
     try:
