@@ -87,7 +87,7 @@ async def main(context: Context):
                 continue
 
             try:
-                next_controls = expert_action.copy()
+                # next_controls = expert_action.copy() # manual controls
 
                 if frame_num % 8 == 0:
                     print(frame_num)
