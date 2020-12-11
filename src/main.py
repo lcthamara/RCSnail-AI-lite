@@ -5,19 +5,56 @@ import asyncio
 import signal
 import numpy as np
 import zmq
+import cv2
+import copy
 from zmq.asyncio import Context
+
+import os
+
+import random
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.models import load_model
+from tensorflow.keras.applications.mobilenet import preprocess_input
 
 from commons.common_zmq import recv_array_with_json, initialize_subscriber, initialize_publisher
 from commons.configuration_manager import ConfigurationManager
 
-# from src.utilities.transformer import Transformer
 from utilities.recorder import Recorder
 
+car_mask = cv2.imread('car-mask-120x120.png',0)
+
+def process_frame(frame):
+  # resize
+  camera_dim = (160, 80) # (width, height)
+  frame = cv2.resize(frame, camera_dim, interpolation = cv2.INTER_AREA)
+
+  # crop
+  top_cutoff = 40 # cut off world beyond the track
+  new_height = 40
+  frame = frame[top_cutoff:top_cutoff+new_height, :]
+
+  # make it square
+  square_dim = (120,120)
+  frame = cv2.resize(frame, square_dim, interpolation = cv2.INTER_AREA)
+
+  # apply car mask
+  frame = cv2.bitwise_and(frame,frame,mask = car_mask)
+  frame = cv2.resize(frame, (224, 224), interpolation = cv2.INTER_AREA)
+
+  # BGR -> RGB
+  frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+  # rescale
+  frame = preprocess_input(frame)
+  frame = tf.expand_dims(frame, axis=0)
+
+  return frame
 
 async def main(context: Context):
     config_manager = ConfigurationManager()
     conf = config_manager.config
-    # transformer = Transformer(conf)
     recorder = Recorder(conf)
 
     data_queue = context.socket(zmq.SUB)
@@ -27,16 +64,23 @@ async def main(context: Context):
     dagger_training_enabled = conf.dagger_training_enabled
     dagger_epoch_size = conf.dagger_epoch_size
 
+    new_model = tf.keras.models.load_model('better_model.h5')
+    print("i love rcsnail")
+
     try:
-        mem_slice_frames = []
-        mem_slice_numerics = []
-        data_count = 0
-        
         await initialize_subscriber(data_queue, conf.data_queue_port)
         await initialize_publisher(controls_queue, conf.controls_queue_port)
 
+        frame_num = 0
+
+        next_controls = None
+
         while True:
+            frame_num += 1
+            
             frame, data = await recv_array_with_json(queue=data_queue)
+            start_thinking = time.time()
+
             telemetry, expert_action = data
             if frame is None or telemetry is None or expert_action is None:
                 logging.info("None data")
@@ -44,13 +88,24 @@ async def main(context: Context):
 
             try:
                 next_controls = expert_action.copy()
-                time.sleep(0.01)
+
+                if frame_num % 8 == 0:
+                    print(frame_num)
+
+                    frame = process_frame(frame)              
+                    steering = new_model.predict(frame, steps = 1)
+                    direction = (np.argmax(steering[0], axis = 0) -1)*0.75
+                    direction = float(direction)
+
+                    next_controls = {"p":16565,"c":1593708369816,"g":1,"s":direction,"t":0.5,"b":0}
                 
                 recorder.record_full(frame, telemetry, expert_action, next_controls)
                 controls_queue.send_json(next_controls)
+
             except Exception as ex:
                 print("Sending exception: {}".format(ex))
                 traceback.print_tb(ex.__traceback__)
+
     except Exception as ex:
         print("Exception: {}".format(ex))
         traceback.print_tb(ex.__traceback__)
