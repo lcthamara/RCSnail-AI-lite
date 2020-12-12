@@ -105,8 +105,8 @@ async def main(context: Context):
         data_queue.close()
         controls_queue.close()
 
-        if recorder is not None:
-            recorder.save_session_with_expert()
+        # if recorder is not None:
+        #     recorder.save_session_with_expert()
 
 
 def cancel_tasks(loop):
