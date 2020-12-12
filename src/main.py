@@ -10,7 +10,6 @@ import copy
 from zmq.asyncio import Context
 
 import os
-import random
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.models import load_model
@@ -21,8 +20,17 @@ from commons.configuration_manager import ConfigurationManager
 
 SKIP_FRAMES = 8
 PATH_TO_CAR_MASK = 'car-mask-224x224.png'
-PATH_TO_MODEL = 'classifier-wheel-dataset.h5'
+PATH_TO_MODEL = 'better_model.h5'
 CONSTANT_THROTTLE = 0.55
+CONSTANT_THROTTLE_REVERSE = 1.0
+TIME_BACKWARDS = 0.6
+
+def drive_backwards(frame, old_frame):
+    dif = np.sum(np.absolute(np.array(frame) - np.array(old_frame)))
+    if (dif > 1000):
+        return False
+    else:
+        return True
 
 def process_frame(frame):
   
@@ -67,6 +75,8 @@ async def main(context: Context):
 
         next_controls = None
 
+        old_frame = np.zeros((1,224,224,3))
+
         while True:
             frame_num += 1
             
@@ -91,8 +101,22 @@ async def main(context: Context):
 
                     next_controls = {"p":packet_num,"c":timestamp,"g":1,"s":direction,"t":CONSTANT_THROTTLE,"b":0}
 
-                # recorder.record_full(frame, telemetry, expert_action, next_controls)
-                controls_queue.send_json(next_controls)
+                    # recorder.record_full(frame, telemetry, expert_action, next_controls)
+                    controls_queue.send_json(next_controls)
+
+                    reverse = drive_backwards(frame, old_frame)
+                    if (reverse == True):
+                        time_start_reverse = time.time()
+                        a = time.time() - time_start_reverse
+                        while (a < TIME_BACKWARDS):
+                            # print("loop reverse")
+                            # print(a)
+                            next_controls = {"p":packet_num,"c":timestamp,"g":-1,"s":0.0,"t":CONSTANT_THROTTLE_REVERSE,"b":0}
+                            a = time.time() - time_start_reverse
+                            # recorder.record_full(frame, telemetry, expert_action, next_controls)
+                            controls_queue.send_json(next_controls)
+
+                    old_frame = copy.deepcopy(frame)
 
             except Exception as ex:
                 print("Sending exception: {}".format(ex))
