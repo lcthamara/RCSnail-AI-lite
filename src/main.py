@@ -21,8 +21,9 @@ from commons.configuration_manager import ConfigurationManager
 
 SKIP_FRAMES = 8
 PATH_TO_CAR_MASK = 'car-mask-224x224.png'
-PATH_TO_MODEL = 'classifier-wheel-dataset.h5'
+PATH_TO_MODEL = 'super_regressor.h5'
 CONSTANT_THROTTLE = 0.55
+STRAIGHT_STEERING = -0.12 
 
 def process_frame(frame):
   
@@ -84,12 +85,11 @@ async def main(context: Context):
 
                 if frame_num % SKIP_FRAMES == 1:
                     frame = process_frame(frame)              
-                    steering = decision_model.predict(frame, steps = 1)
-                    direction = (np.argmax(steering[0], axis = 0) -1)*0.75
-                    direction = float(direction)
-                    direction -= 0.12
+                    steering = decision_model.predict(frame, steps = 1).item()
+                    steering += STRAIGHT_STEERING
+                    print('Steering:', steering)
 
-                    next_controls = {"p":packet_num,"c":timestamp,"g":1,"s":direction,"t":CONSTANT_THROTTLE,"b":0}
+                    next_controls = {"p":packet_num,"c":timestamp,"g":1,"s":steering,"t":CONSTANT_THROTTLE,"b":0}
 
                 # recorder.record_full(frame, telemetry, expert_action, next_controls)
                 controls_queue.send_json(next_controls)
@@ -105,8 +105,8 @@ async def main(context: Context):
         data_queue.close()
         controls_queue.close()
 
-        if recorder is not None:
-            recorder.save_session_with_expert()
+        # if recorder is not None:
+        #     recorder.save_session_with_expert()
 
 
 def cancel_tasks(loop):
