@@ -10,38 +10,30 @@ import copy
 from zmq.asyncio import Context
 
 import os
-
 import random
-
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.models import load_model
 from tensorflow.keras.applications.mobilenet import preprocess_input
-
 from commons.common_zmq import recv_array_with_json, initialize_subscriber, initialize_publisher
 from commons.configuration_manager import ConfigurationManager
+# from utilities.recorder import Recorder
 
-from utilities.recorder import Recorder
-
-car_mask = cv2.imread('car-mask-120x120.png',0)
+SKIP_FRAMES = 8
+PATH_TO_CAR_MASK = 'car-mask-224x224.png'
+PATH_TO_MODEL = 'classifier-wheel-dataset.h5'
+CONSTANT_THROTTLE = 0.55
 
 def process_frame(frame):
-  # resize
-  camera_dim = (160, 80) # (width, height)
-  frame = cv2.resize(frame, camera_dim, interpolation = cv2.INTER_AREA)
-
+  
   # crop
-  top_cutoff = 40 # cut off world beyond the track
-  new_height = 40
+  top_cutoff = frame.shape[0]//2 # cut off world beyond the track
+  new_height = top_cutoff
   frame = frame[top_cutoff:top_cutoff+new_height, :]
-
-  # make it square
-  square_dim = (120,120)
-  frame = cv2.resize(frame, square_dim, interpolation = cv2.INTER_AREA)
-
+  
   # apply car mask
-  frame = cv2.bitwise_and(frame,frame,mask = car_mask)
   frame = cv2.resize(frame, (224, 224), interpolation = cv2.INTER_AREA)
+  frame = cv2.bitwise_and(frame,frame,mask = car_mask)
 
   # BGR -> RGB
   frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -53,19 +45,19 @@ def process_frame(frame):
   return frame
 
 async def main(context: Context):
+    global car_mask
+
     config_manager = ConfigurationManager()
     conf = config_manager.config
-    recorder = Recorder(conf)
+    # recorder = Recorder(conf)
 
     data_queue = context.socket(zmq.SUB)
     controls_queue = context.socket(zmq.PUB)
 
-    control_mode = conf.control_mode
-    dagger_training_enabled = conf.dagger_training_enabled
-    dagger_epoch_size = conf.dagger_epoch_size
+    decision_model = tf.keras.models.load_model(PATH_TO_MODEL)
+    car_mask = cv2.imread(PATH_TO_CAR_MASK,0)
 
-    new_model = tf.keras.models.load_model('better_model.h5')
-    print("i love rcsnail")
+    print("Car READY")
 
     try:
         await initialize_subscriber(data_queue, conf.data_queue_port)
@@ -79,9 +71,10 @@ async def main(context: Context):
             frame_num += 1
             
             frame, data = await recv_array_with_json(queue=data_queue)
-            start_thinking = time.time()
 
             telemetry, expert_action = data
+            packet_num = expert_action['p']
+            timestamp = expert_action['c']
             if frame is None or telemetry is None or expert_action is None:
                 logging.info("None data")
                 continue
@@ -89,17 +82,16 @@ async def main(context: Context):
             try:
                 # next_controls = expert_action.copy() # manual controls
 
-                if frame_num % 8 == 0:
-                    print(frame_num)
-
+                if frame_num % SKIP_FRAMES == 1:
                     frame = process_frame(frame)              
-                    steering = new_model.predict(frame, steps = 1)
+                    steering = decision_model.predict(frame, steps = 1)
                     direction = (np.argmax(steering[0], axis = 0) -1)*0.75
                     direction = float(direction)
+                    direction -= 0.12
 
-                    next_controls = {"p":16565,"c":1593708369816,"g":1,"s":direction,"t":0.5,"b":0}
-                
-                recorder.record_full(frame, telemetry, expert_action, next_controls)
+                    next_controls = {"p":packet_num,"c":timestamp,"g":1,"s":direction,"t":CONSTANT_THROTTLE,"b":0}
+
+                # recorder.record_full(frame, telemetry, expert_action, next_controls)
                 controls_queue.send_json(next_controls)
 
             except Exception as ex:
