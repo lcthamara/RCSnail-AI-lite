@@ -129,7 +129,6 @@ async def main(context: Context):
                     next_controls = {"p":packet_num,"c":timestamp,"g":1,"s":direction,"t":CONSTANT_THROTTLE,"b":0}
 
                     if should_drive_backwards(last_image, previous_image):
-                        time_start_reverse = time.time()
                         next_controls = {"p":packet_num,"c":timestamp,"g":-1,"s":0.0,"t":CONSTANT_THROTTLE_REVERSE,"b":0}
 
                     # recorder.record_full(frame, telemetry, expert_action, next_controls)
