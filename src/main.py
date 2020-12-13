@@ -10,7 +10,6 @@ import copy
 from zmq.asyncio import Context
 
 import os
-import random
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.models import load_model
@@ -19,10 +18,31 @@ from commons.common_zmq import recv_array_with_json, initialize_subscriber, init
 from commons.configuration_manager import ConfigurationManager
 # from utilities.recorder import Recorder
 
-SKIP_FRAMES = 8
+SKIP_FRAMES = 8 # we make decision every 9th frame, should be a multiple of (SKIP_FRAMES_BUFFER+1)
+SKIP_FRAMES_BUFFER = 2 # we put every 3rd frame into a buffer
+BUFFER_SIZE = 3
 PATH_TO_CAR_MASK = 'car-mask-224x224.png'
 PATH_TO_MODEL = 'classifier-wheel-dataset.h5'
 CONSTANT_THROTTLE = 0.55
+
+class MaxSizeList(object): # from here: https://codereview.stackexchange.com/a/159065
+    def __init__(self, size_limit):
+        self.list = [None] * size_limit
+        self.next = 0
+
+    def push(self, item):
+        self.list[self.next % len(self.list)] = item
+        self.next += 1
+
+    def get_list(self):
+        if self.next < len(self.list):
+            return self.list[:self.next]
+        else:
+            split = self.next % len(self.list)
+            return self.list[split:] + self.list[:split]
+
+    def __len__(self):
+        return len(self.get_list())
 
 def process_frame(frame):
   
@@ -63,10 +83,12 @@ async def main(context: Context):
         await initialize_subscriber(data_queue, conf.data_queue_port)
         await initialize_publisher(controls_queue, conf.controls_queue_port)
 
-        frame_num = 0
+        frame_num = -1
 
         next_controls = None
 
+        buffer = MaxSizeList(BUFFER_SIZE)     
+            
         while True:
             frame_num += 1
             
@@ -81,18 +103,25 @@ async def main(context: Context):
 
             try:
                 # next_controls = expert_action.copy() # manual controls
+                
+                should_use_frame = frame_num % (SKIP_FRAMES_BUFFER+1) == SKIP_FRAMES_BUFFER
+                if should_use_frame:
+                    frame = process_frame(frame)
+                    buffer.push(frame)
 
-                if frame_num % SKIP_FRAMES == 1:
-                    frame = process_frame(frame)              
-                    steering = decision_model.predict(frame, steps = 1)
+                if len(buffer) >= BUFFER_SIZE and frame_num % SKIP_FRAMES+1 == SKIP_FRAMES:
+                    list_images = buffer.get_list()
+                    last_image = list_images[-1]
+
+                    steering = decision_model.predict(last_image, steps = 1)
                     direction = (np.argmax(steering[0], axis = 0) -1)*0.75
                     direction = float(direction)
                     direction -= 0.12
 
                     next_controls = {"p":packet_num,"c":timestamp,"g":1,"s":direction,"t":CONSTANT_THROTTLE,"b":0}
 
-                # recorder.record_full(frame, telemetry, expert_action, next_controls)
-                controls_queue.send_json(next_controls)
+                    # recorder.record_full(frame, telemetry, expert_action, next_controls)
+                    controls_queue.send_json(next_controls)
 
             except Exception as ex:
                 print("Sending exception: {}".format(ex))
