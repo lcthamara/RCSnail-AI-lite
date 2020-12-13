@@ -6,7 +6,6 @@ import signal
 import numpy as np
 import zmq
 import cv2
-import copy
 from zmq.asyncio import Context
 
 import os
@@ -24,6 +23,15 @@ BUFFER_SIZE = 3
 PATH_TO_CAR_MASK = 'car-mask-224x224.png'
 PATH_TO_MODEL = 'classifier-wheel-dataset.h5'
 CONSTANT_THROTTLE = 0.55
+CONSTANT_THROTTLE_REVERSE = 1.0
+TIME_BACKWARDS = 0.6
+
+def should_drive_backwards(frame, old_frame):
+    dif = np.sum(np.absolute(np.array(frame) - np.array(old_frame)))
+    if (dif > 1000):
+        return False
+    else:
+        return True
 
 class MaxSizeList(object): # from here: https://codereview.stackexchange.com/a/159065
     def __init__(self, size_limit):
@@ -111,7 +119,7 @@ async def main(context: Context):
 
                 if len(buffer) >= BUFFER_SIZE and frame_num % SKIP_FRAMES+1 == SKIP_FRAMES:
                     list_images = buffer.get_list()
-                    last_image = list_images[-1]
+                    previous_image, last_image = list_images[-2:]
 
                     steering = decision_model.predict(last_image, steps = 1)
                     direction = (np.argmax(steering[0], axis = 0) -1)*0.75
@@ -120,8 +128,13 @@ async def main(context: Context):
 
                     next_controls = {"p":packet_num,"c":timestamp,"g":1,"s":direction,"t":CONSTANT_THROTTLE,"b":0}
 
+                    if should_drive_backwards(last_image, previous_image):
+                        time_start_reverse = time.time()
+                        next_controls = {"p":packet_num,"c":timestamp,"g":-1,"s":0.0,"t":CONSTANT_THROTTLE_REVERSE,"b":0}
+
                     # recorder.record_full(frame, telemetry, expert_action, next_controls)
-                    controls_queue.send_json(next_controls)
+                    controls_queue.send_json(next_controls)    
+
 
             except Exception as ex:
                 print("Sending exception: {}".format(ex))
