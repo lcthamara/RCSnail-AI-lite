@@ -20,8 +20,8 @@ from commons.configuration_manager import ConfigurationManager
 SKIP_FRAMES = 8 # we make decision every 9th frame, should be a multiple of (SKIP_FRAMES_BUFFER+1)
 SKIP_FRAMES_BUFFER = 2 # we put every 3rd frame into a buffer
 BUFFER_SIZE = 3
-PATH_TO_CAR_MASK = 'car-mask-224x224.png'
-PATH_TO_MODEL = 'classifier-wheel-dataset.h5'
+PATH_TO_CAR_MASK = 'new-mask-car-1.png'
+PATH_TO_MODEL = 'fine-tuned-classifier.h5'
 CONSTANT_THROTTLE = 0.55
 CONSTANT_THROTTLE_REVERSE = 1.0
 TIME_BACKWARDS = 0.6
@@ -52,6 +52,29 @@ class MaxSizeList(object): # from here: https://codereview.stackexchange.com/a/1
     def __len__(self):
         return len(self.get_list())
 
+def process_frame_car2(frame):
+  
+  # crop
+  top_cutoff = frame.shape[0]//2 # cut off world beyond the track
+  new_height = top_cutoff
+  frame = frame[(top_cutoff - 6):(top_cutoff+new_height - 6), :]
+  
+  # apply car mask
+  frame = cv2.resize(frame, (224, 224), interpolation = cv2.INTER_AREA)
+  frame = cv2.bitwise_and(frame,frame,mask = car_mask)
+
+  # BGR -> RGB
+  frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+  
+  #cv2.imshow('image', frame)
+  #cv2.waitKey(0)
+
+  # rescale
+  frame = preprocess_input(frame)
+  frame = tf.expand_dims(frame, axis=0)
+
+  return frame
+
 def process_frame(frame):
   
   # crop
@@ -65,6 +88,9 @@ def process_frame(frame):
 
   # BGR -> RGB
   frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+  #cv2.imshow('image', frame)
+  #cv2.waitKey(0)
 
   # rescale
   frame = preprocess_input(frame)
@@ -130,10 +156,15 @@ async def main(context: Context):
 
                     if should_drive_backwards(last_image, previous_image):
                         next_controls = {"p":packet_num,"c":timestamp,"g":-1,"s":0.0,"t":CONSTANT_THROTTLE_REVERSE,"b":0}
+                        controls_queue.send_json(next_controls) 
+                
+                if abs(expert_action['t']) > 0:
+                    next_controls = expert_action.copy() # manual controls
+                    next_controls['t'] = CONSTANT_THROTTLE + 0.001
+                    print('Expert intervention', next_controls) 
 
-                    # recorder.record_full(frame, telemetry, expert_action, next_controls)
-                    controls_queue.send_json(next_controls)    
-
+                # recorder.record_full(frame, telemetry, expert_action, next_controls)
+                controls_queue.send_json(next_controls)
 
             except Exception as ex:
                 print("Sending exception: {}".format(ex))
@@ -170,7 +201,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_cancel_tasks)
     signal.signal(signal.SIGTERM, signal_cancel_tasks)
 
-    context = zmq.asyncio.Context()
+    context = Context()#zmq.asyncio.Context()
     try:
         loop.run_until_complete(main(context))
     except Exception as ex:
